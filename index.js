@@ -3,97 +3,76 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.run = run;
-function _traverse() {
-  const data = require("@babel/traverse");
-  _traverse = function () {
-    return data;
-  };
-  return data;
-}
-var _pluginPass = require("./plugin-pass");
-var _blockHoistPlugin = require("./block-hoist-plugin");
-var _normalizeOpts = require("./normalize-opts");
-var _normalizeFile = require("./normalize-file");
-var _generate = require("./file/generate");
-var _deepArray = require("../config/helpers/deep-array");
-function* run(config, code, ast) {
-  const file = yield* (0, _normalizeFile.default)(config.passes, (0, _normalizeOpts.default)(config), code, ast);
-  const opts = file.opts;
-  try {
-    yield* transformFile(file, config.passes);
-  } catch (e) {
-    var _opts$filename;
-    e.message = `${(_opts$filename = opts.filename) != null ? _opts$filename : "unknown file"}: ${e.message}`;
-    if (!e.code) {
-      e.code = "BABEL_TRANSFORM_ERROR";
-    }
-    throw e;
+exports.needsParens = needsParens;
+exports.needsWhitespace = needsWhitespace;
+exports.needsWhitespaceAfter = needsWhitespaceAfter;
+exports.needsWhitespaceBefore = needsWhitespaceBefore;
+var whitespace = require("./whitespace");
+var parens = require("./parentheses");
+var _t = require("@babel/types");
+const {
+  FLIPPED_ALIAS_KEYS,
+  isCallExpression,
+  isExpressionStatement,
+  isMemberExpression,
+  isNewExpression
+} = _t;
+function expandAliases(obj) {
+  const newObj = {};
+  function add(type, func) {
+    const fn = newObj[type];
+    newObj[type] = fn ? function (node, parent, stack) {
+      const result = fn(node, parent, stack);
+      return result == null ? func(node, parent, stack) : result;
+    } : func;
   }
-  let outputCode, outputMap;
-  try {
-    if (opts.code !== false) {
-      ({
-        outputCode,
-        outputMap
-      } = (0, _generate.default)(config.passes, file));
-    }
-  } catch (e) {
-    var _opts$filename2;
-    e.message = `${(_opts$filename2 = opts.filename) != null ? _opts$filename2 : "unknown file"}: ${e.message}`;
-    if (!e.code) {
-      e.code = "BABEL_GENERATE_ERROR";
-    }
-    throw e;
-  }
-  return {
-    metadata: file.metadata,
-    options: opts,
-    ast: opts.ast === true ? file.ast : null,
-    code: outputCode === undefined ? null : outputCode,
-    map: outputMap === undefined ? null : outputMap,
-    sourceType: file.ast.program.sourceType,
-    externalDependencies: (0, _deepArray.flattenToSet)(config.externalDependencies)
-  };
-}
-function* transformFile(file, pluginPasses) {
-  for (const pluginPairs of pluginPasses) {
-    const passPairs = [];
-    const passes = [];
-    const visitors = [];
-    for (const plugin of pluginPairs.concat([(0, _blockHoistPlugin.default)()])) {
-      const pass = new _pluginPass.default(file, plugin.key, plugin.options);
-      passPairs.push([plugin, pass]);
-      passes.push(pass);
-      visitors.push(plugin.visitor);
-    }
-    for (const [plugin, pass] of passPairs) {
-      const fn = plugin.pre;
-      if (fn) {
-        const result = fn.call(pass, file);
-        yield* [];
-        if (isThenable(result)) {
-          throw new Error(`You appear to be using an plugin with an async .pre, ` + `which your current version of Babel does not support. ` + `If you're using a published plugin, you may need to upgrade ` + `your @babel/core version.`);
-        }
+  for (const type of Object.keys(obj)) {
+    const aliases = FLIPPED_ALIAS_KEYS[type];
+    if (aliases) {
+      for (const alias of aliases) {
+        add(alias, obj[type]);
       }
-    }
-    const visitor = _traverse().default.visitors.merge(visitors, passes, file.opts.wrapPluginVisitorMethod);
-    (0, _traverse().default)(file.ast, visitor, file.scope);
-    for (const [plugin, pass] of passPairs) {
-      const fn = plugin.post;
-      if (fn) {
-        const result = fn.call(pass, file);
-        yield* [];
-        if (isThenable(result)) {
-          throw new Error(`You appear to be using an plugin with an async .post, ` + `which your current version of Babel does not support. ` + `If you're using a published plugin, you may need to upgrade ` + `your @babel/core version.`);
-        }
-      }
+    } else {
+      add(type, obj[type]);
     }
   }
+  return newObj;
 }
-function isThenable(val) {
-  return !!val && (typeof val === "object" || typeof val === "function") && !!val.then && typeof val.then === "function";
+const expandedParens = expandAliases(parens);
+const expandedWhitespaceNodes = expandAliases(whitespace.nodes);
+function find(obj, node, parent, printStack) {
+  const fn = obj[node.type];
+  return fn ? fn(node, parent, printStack) : null;
 }
-0 && 0;
+function isOrHasCallExpression(node) {
+  if (isCallExpression(node)) {
+    return true;
+  }
+  return isMemberExpression(node) && isOrHasCallExpression(node.object);
+}
+function needsWhitespace(node, parent, type) {
+  if (!node) return false;
+  if (isExpressionStatement(node)) {
+    node = node.expression;
+  }
+  const flag = find(expandedWhitespaceNodes, node, parent);
+  if (typeof flag === "number") {
+    return (flag & type) !== 0;
+  }
+  return false;
+}
+function needsWhitespaceBefore(node, parent) {
+  return needsWhitespace(node, parent, 1);
+}
+function needsWhitespaceAfter(node, parent) {
+  return needsWhitespace(node, parent, 2);
+}
+function needsParens(node, parent, printStack) {
+  if (!parent) return false;
+  if (isNewExpression(parent) && parent.callee === node) {
+    if (isOrHasCallExpression(node)) return true;
+  }
+  return find(expandedParens, node, parent, printStack);
+}
 
 //# sourceMappingURL=index.js.map
